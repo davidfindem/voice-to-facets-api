@@ -124,7 +124,8 @@ Return ONLY a JSON array of command objects. No explanations.`;
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${openaiApiKey}`,
+        'Authorization': `Bearer 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`,
+
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
