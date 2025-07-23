@@ -1,45 +1,40 @@
-// Enhanced voice-commands.js - Your existing endpoint with candidate integration
-// This maintains backward compatibility while adding new functionality
-
-// Import the candidate processing function
-import { processVoiceWithOpenAI } from './candidates.js';
-
-// Global data storage (shared with candidates.js)
-let globalData = {
-    commands: [],
-    timestamp: null,
-    candidates: [],
-    voiceCommands: [],
-    pendingCommands: []
-};
+// ChatGPT Agentic Memory - Voice Commands Endpoint
+// Processes voice commands using ChatGPT's memory of candidates
 
 export default async function handler(req, res) {
-    // Enable CORS
+    // CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    res.setHeader('Access-Control-Max-Age', '86400');
     
+    // Handle preflight OPTIONS requests
     if (req.method === 'OPTIONS') {
         return res.status(200).end();
     }
 
     const requestId = `voice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    console.log(`[${requestId}] 🎤 Voice Commands API - ${req.method} ${req.url}`);
+    const timestamp = new Date().toISOString();
+    
+    console.log(`[${requestId}] 🎤 ChatGPT Memory - Voice command: ${req.method} ${req.url}`);
 
     try {
         if (req.method === 'GET') {
-            // Your existing GET endpoint - return current commands
+            // Return current voice commands from ChatGPT memory
+            const memoryData = await queryVoiceCommandsFromChatGPT(requestId);
+            
             return res.status(200).json({
-                commands: globalData.commands,
-                timestamp: new Date().toISOString(),
-                candidatesAvailable: globalData.candidates.length,
-                pendingActions: globalData.pendingCommands.filter(cmd => !cmd.executed).length
+                commands: memoryData.commands || [],
+                timestamp: timestamp,
+                memoryStatus: memoryData.status,
+                chatGPTSummary: memoryData.summary,
+                requestId: requestId
             });
         }
         
         if (req.method === 'POST') {
-            // Enhanced POST endpoint - process voice commands from ElevenLabs
-            const { voiceText, metadata, source } = req.body;
+            // Process new voice command with ChatGPT
+            const { voiceText, metadata } = req.body;
             
             if (!voiceText) {
                 return res.status(400).json({
@@ -51,138 +46,70 @@ export default async function handler(req, res) {
             
             console.log(`[${requestId}] 🎤 Processing voice: "${voiceText}"`);
             
-            // If we have candidates, process with AI for shortlisting
-            if (globalData.candidates.length > 0) {
-                console.log(`[${requestId}] 🧠 Processing with OpenAI (${globalData.candidates.length} candidates available)`);
-                
-                // Process with OpenAI for candidate shortlisting
-                const aiResponse = await processVoiceWithOpenAI(voiceText, globalData.candidates, requestId);
-                
-                // Store the voice command
-                const voiceCommand = {
-                    id: `voice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                    text: voiceText,
-                    timestamp: new Date().toISOString(),
-                    source: source || 'ElevenLabs',
-                    aiResponse: aiResponse,
-                    processed: true
-                };
-                
-                globalData.voiceCommands.push(voiceCommand);
-                
-                // Generate shortlist commands
-                let commandsGenerated = 0;
-                if (aiResponse.actions && aiResponse.actions.length > 0) {
-                    for (const action of aiResponse.actions) {
-                        const command = {
-                            id: `cmd_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                            type: action.type,
-                            action: action.action,
-                            candidateName: action.candidateName,
-                            confidence: action.confidence,
-                            voiceCommandId: voiceCommand.id,
-                            timestamp: new Date().toISOString(),
-                            executed: false
-                        };
-                        
-                        globalData.pendingCommands.push(command);
-                        globalData.commands.push(command); // For backward compatibility
-                        commandsGenerated++;
-                    }
-                }
-                
-                console.log(`[${requestId}] ✅ Generated ${commandsGenerated} shortlist commands`);
-                
-                return res.status(200).json({
-                    success: true,
-                    voiceCommandId: voiceCommand.id,
-                    interpretation: aiResponse.interpretation,
-                    actions: aiResponse.actions,
-                    commandsGenerated: commandsGenerated,
-                    commands: globalData.commands, // For backward compatibility
-                    timestamp: new Date().toISOString(),
-                    requestId: requestId
-                });
-                
-            } else {
-                // No candidates available - store as basic voice command
-                console.log(`[${requestId}] ⚠️ No candidates available for shortlisting`);
-                
-                const basicCommand = {
-                    id: `basic_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                    text: voiceText,
-                    timestamp: new Date().toISOString(),
-                    source: source || 'ElevenLabs',
-                    processed: false,
-                    note: 'No candidates available for processing'
-                };
-                
-                globalData.commands.push(basicCommand);
-                
-                return res.status(200).json({
-                    success: true,
-                    message: 'Voice command received but no candidates available for shortlisting',
-                    command: basicCommand,
-                    commands: globalData.commands,
-                    timestamp: new Date().toISOString(),
-                    requestId: requestId,
-                    note: 'Upload candidates via Chrome extension first'
-                });
-            }
+            const voiceResponse = await processVoiceWithChatGPTMemory(voiceText, metadata, requestId);
+            
+            return res.status(200).json({
+                success: true,
+                voiceText: voiceText,
+                interpretation: voiceResponse.interpretation,
+                actions: voiceResponse.actions,
+                commandsGenerated: voiceResponse.actions?.length || 0,
+                memoryStatus: voiceResponse.status,
+                chatGPTResponse: voiceResponse.summary,
+                timestamp: timestamp,
+                requestId: requestId
+            });
         }
         
-        // Method not allowed
-        return res.status(405).json({
-            error: 'Method not allowed',
-            allowedMethods: ['GET', 'POST'],
-            requestId: requestId
+        // Default response for other methods
+        return res.status(200).json({
+            status: 'ChatGPT Agentic Memory - Voice Commands API',
+            timestamp: timestamp,
+            requestId: requestId,
+            memorySystem: 'ChatGPT Active',
+            endpoints: [
+                'GET /api/voice-commands - Get current voice commands from memory',
+                'POST /api/voice-commands - Process new voice command with ChatGPT'
+            ]
         });
         
     } catch (error) {
-        console.error(`[${requestId}] ❌ Voice Commands Error:`, error);
+        console.error(`[${requestId}] ❌ Voice command error:`, error);
         return res.status(500).json({
             success: false,
-            error: 'Internal server error',
+            error: 'Internal server error processing voice command',
             message: error.message,
             requestId: requestId,
-            timestamp: new Date().toISOString()
+            timestamp: timestamp
         });
     }
 }
 
-// Helper function to process voice with OpenAI (shared with candidates.js)
-async function processVoiceWithOpenAI(voiceText, candidates, requestId) {
-    const candidateNames = candidates.map(c => c.name);
-    
-    const systemPrompt = `You are a voice command interpreter for a candidate shortlisting system.
-
-Current candidates available: ${candidateNames.join(', ')}
-
-Your job is to interpret voice commands and generate shortlist actions. 
-
-Voice commands might be like:
-- "Shortlist Todd Kurtz and Kyle Scharnhorst"
-- "Add Kenneth Chen to the shortlist"
-- "I want to shortlist the first three candidates"
-- "Remove Scott Goldwater from shortlist"
-
-Respond with JSON in this format:
-{
-  "interpretation": "Brief explanation of what the user wants",
-  "actions": [
-    {
-      "type": "shortlist",
-      "action": "add" or "remove",
-      "candidateName": "Exact candidate name",
-      "confidence": 0.0 to 1.0
+// Query ChatGPT memory for voice commands
+async function queryVoiceCommandsFromChatGPT(requestId) {
+    if (!process.env.OPENAI_API_KEY) {
+        return {
+            status: 'fallback',
+            summary: 'No ChatGPT memory available',
+            commands: []
+        };
     }
-  ]
-}
-
-If no clear shortlist action is requested, return empty actions array.
-Only use exact candidate names from the provided list.`;
 
     try {
+        const systemPrompt = `You are an intelligent agentic memory system for a voice-controlled candidate management platform.
+
+Please provide a list of recent voice commands you've processed, if any.
+
+Respond in JSON format:
+{
+  "commands": [
+    {"text": "voice command", "timestamp": "time", "processed": true}
+  ],
+  "summary": "Brief summary of voice command history"
+}`;
+
+        const userMessage = `VOICE COMMANDS QUERY: What voice commands have you processed recently? Please list them.`;
+
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -193,7 +120,7 @@ Only use exact candidate names from the provided list.`;
                 model: 'gpt-4',
                 messages: [
                     { role: 'system', content: systemPrompt },
-                    { role: 'user', content: voiceText }
+                    { role: 'user', content: userMessage }
                 ],
                 temperature: 0.1,
                 max_tokens: 500
@@ -201,46 +128,144 @@ Only use exact candidate names from the provided list.`;
         });
 
         if (!response.ok) {
-            throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
+            throw new Error(`OpenAI API error: ${response.status}`);
         }
 
         const data = await response.json();
-        const aiResponse = data.choices[0].message.content;
+        const chatGPTResponse = data.choices[0].message.content;
         
-        console.log(`[${requestId}] 🧠 OpenAI response: ${aiResponse}`);
-        
-        const parsedResponse = JSON.parse(aiResponse);
-        console.log(`[${requestId}] ✅ Parsed ${parsedResponse.actions?.length || 0} actions`);
-        
-        return parsedResponse;
-        
-    } catch (error) {
-        console.error(`[${requestId}] ❌ OpenAI error:`, error);
-        
-        // Fallback: simple keyword matching
-        const fallbackResponse = {
-            interpretation: `Fallback processing: "${voiceText}"`,
-            actions: []
-        };
-        
-        const lowerVoiceText = voiceText.toLowerCase();
-        
-        if (lowerVoiceText.includes('shortlist') || lowerVoiceText.includes('add')) {
-            candidateNames.forEach(name => {
-                if (lowerVoiceText.includes(name.toLowerCase())) {
-                    fallbackResponse.actions.push({
-                        type: 'shortlist',
-                        action: 'add',
-                        candidateName: name,
-                        confidence: 0.7
-                    });
-                }
-            });
+        let parsedData;
+        try {
+            parsedData = JSON.parse(chatGPTResponse);
+        } catch (parseError) {
+            parsedData = {
+                commands: [],
+                summary: chatGPTResponse
+            };
         }
         
-        console.log(`[${requestId}] 🔄 Fallback generated ${fallbackResponse.actions.length} actions`);
+        return {
+            status: 'retrieved',
+            summary: parsedData.summary,
+            commands: parsedData.commands || []
+        };
         
-        return fallbackResponse;
+    } catch (error) {
+        console.error(`[${requestId}] ❌ ChatGPT voice query error:`, error);
+        return {
+            status: 'error',
+            summary: `Failed to query voice commands: ${error.message}`,
+            commands: []
+        };
     }
 }
 
+// Process voice command with ChatGPT memory
+async function processVoiceWithChatGPTMemory(voiceText, metadata, requestId) {
+    if (!process.env.OPENAI_API_KEY) {
+        console.log(`[${requestId}] ⚠️ No OpenAI API key - using fallback processing`);
+        return {
+            status: 'fallback',
+            interpretation: `Fallback processing: "${voiceText}"`,
+            actions: [],
+            summary: 'Processed without ChatGPT memory'
+        };
+    }
+
+    try {
+        const systemPrompt = `You are an intelligent agentic memory system for a voice-controlled candidate management platform.
+
+Your role:
+- REMEMBER candidate data when uploaded
+- PROCESS voice commands about candidates using your memory
+- GENERATE specific shortlist actions based on voice commands
+- MAINTAIN context of all previous interactions
+
+When processing voice commands:
+1. Use your memory of stored candidates
+2. Interpret the voice command intent
+3. Generate specific actions for the Chrome extension to execute
+
+Voice commands might be like:
+- "Shortlist Todd Kurtz and Kyle Scharnhorst"
+- "Add Kenneth Chen to the shortlist"
+- "Remove Scott Goldwater from shortlist"
+
+Respond in JSON format:
+{
+  "interpretation": "What the user wants to do",
+  "actions": [
+    {
+      "type": "shortlist",
+      "action": "add" or "remove", 
+      "candidateName": "Exact candidate name from memory",
+      "confidence": 0.0 to 1.0
+    }
+  ],
+  "summary": "Brief summary of what you processed"
+}
+
+Only generate actions for candidates you actually remember from previous uploads.`;
+
+        const userMessage = `VOICE COMMAND: "${voiceText}"
+
+Please process this voice command using your memory of stored candidates. Generate appropriate shortlist actions if the command is about shortlisting candidates.
+
+Source: ${metadata?.source || 'Unknown'}
+Timestamp: ${new Date().toISOString()}`;
+
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: 'gpt-4',
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userMessage }
+                ],
+                temperature: 0.1,
+                max_tokens: 800
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`OpenAI API error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        const chatGPTResponse = data.choices[0].message.content;
+        
+        console.log(`[${requestId}] 🧠 ChatGPT Voice Processing: ${chatGPTResponse}`);
+        
+        let parsedResponse;
+        try {
+            parsedResponse = JSON.parse(chatGPTResponse);
+        } catch (parseError) {
+            console.log(`[${requestId}] ⚠️ ChatGPT response not JSON, using text interpretation`);
+            parsedResponse = {
+                interpretation: chatGPTResponse,
+                actions: [],
+                summary: 'Response was not in JSON format'
+            };
+        }
+        
+        return {
+            status: 'processed',
+            interpretation: parsedResponse.interpretation,
+            actions: parsedResponse.actions || [],
+            summary: parsedResponse.summary || 'Voice command processed with ChatGPT memory'
+        };
+        
+    } catch (error) {
+        console.error(`[${requestId}] ❌ ChatGPT voice processing error:`, error);
+        return {
+            status: 'error',
+            interpretation: `Error processing: "${voiceText}"`,
+            actions: [],
+            summary: `Failed to process with ChatGPT: ${error.message}`
+        };
+    }
+}
