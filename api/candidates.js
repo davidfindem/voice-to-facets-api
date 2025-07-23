@@ -1,5 +1,5 @@
 // Enhanced Voice-to-Facets API with Candidate Management
-// Extends your existing API with Chrome extension integration and OpenAI processing
+// Fixed CORS headers for Chrome extension integration
 
 // Global data storage (in production, use a database)
 let globalData = {
@@ -11,12 +11,13 @@ let globalData = {
 };
 
 export default async function handler(req, res) {
-    // Enable CORS for Chrome extension
+    // CORS headers - MUST be first to allow Chrome extension access
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    res.setHeader('Access-Control-Max-Age', '86400');
     
-    // Handle preflight requests
+    // Handle preflight OPTIONS requests
     if (req.method === 'OPTIONS') {
         return res.status(200).end();
     }
@@ -68,8 +69,9 @@ export default async function handler(req, res) {
             integration: {
                 chromeExtension: 'Ready for candidate data upload',
                 elevenLabs: 'Ready for voice command processing',
-                openAI: 'Ready for command interpretation'
-            }
+                openAI: process.env.OPENAI_API_KEY ? 'Ready for command interpretation' : 'Ready with fallback keyword matching'
+            },
+            cors: 'Enabled for Chrome extension access'
         });
         
     } catch (error) {
@@ -93,8 +95,9 @@ async function handleCandidateUpload(req, res, requestId) {
     if (!candidates || !Array.isArray(candidates)) {
         return res.status(400).json({
             success: false,
-            error: 'Invalid candidates data',
-            requestId: requestId
+            error: 'Invalid candidates data - expected array of candidates',
+            requestId: requestId,
+            received: typeof candidates
         });
     }
     
@@ -105,14 +108,12 @@ async function handleCandidateUpload(req, res, requestId) {
     console.log(`[${requestId}] ✅ Stored ${candidates.length} candidates from ${source}`);
     console.log(`[${requestId}] 📊 Candidate names: ${candidates.map(c => c.name).join(', ')}`);
     
-    // Update ElevenLabs with candidate context (if configured)
-    await updateElevenLabsContext(candidates, requestId);
-    
     return res.status(200).json({
         success: true,
         message: `Successfully received ${candidates.length} candidates`,
         candidates: candidates.map(c => c.name),
         source: source,
+        pageUrl: pageUrl,
         timestamp: globalData.lastUpdated,
         requestId: requestId
     });
@@ -134,8 +135,8 @@ async function handleVoiceCommand(req, res, requestId) {
     
     console.log(`[${requestId}] 🎤 Voice text: "${voiceText}"`);
     
-    // Process voice command with OpenAI
-    const aiResponse = await processVoiceWithOpenAI(voiceText, globalData.candidates, requestId);
+    // Process voice command with OpenAI (if available) or fallback
+    const aiResponse = await processVoiceWithAI(voiceText, globalData.candidates, requestId);
     
     // Store voice command
     const voiceCommand = {
@@ -294,7 +295,9 @@ async function handleDashboard(req, res, requestId) {
         },
         systemStatus: {
             apiHealth: 'online',
-            lastActivity: new Date().toISOString()
+            lastActivity: new Date().toISOString(),
+            corsEnabled: true,
+            openAIAvailable: !!process.env.OPENAI_API_KEY
         }
     };
     
@@ -306,37 +309,14 @@ async function handleDashboard(req, res, requestId) {
     });
 }
 
-// Update ElevenLabs with candidate context
-async function updateElevenLabsContext(candidates, requestId) {
-    try {
-        // This would integrate with ElevenLabs API to update the voice agent context
-        // For now, we'll just log the candidate names
-        const candidateNames = candidates.map(c => c.name).join(', ');
-        console.log(`[${requestId}] 🎤 ElevenLabs context updated with candidates: ${candidateNames}`);
-        
-        // TODO: Implement actual ElevenLabs API call when you have the API key
-        // const elevenLabsResponse = await fetch('https://api.elevenlabs.io/v1/agents/update', {
-        //     method: 'POST',
-        //     headers: {
-        //         'Authorization': `Bearer ${process.env.ELEVENLABS_API_KEY}`,
-        //         'Content-Type': 'application/json'
-        //     },
-        //     body: JSON.stringify({
-        //         agent_id: process.env.ELEVENLABS_AGENT_ID,
-        //         context: `Current candidates available for shortlisting: ${candidateNames}`
-        //     })
-        // });
-        
-    } catch (error) {
-        console.error(`[${requestId}] ⚠️ ElevenLabs context update failed:`, error.message);
-    }
-}
-
-// Process voice commands with OpenAI
-async function processVoiceWithOpenAI(voiceText, candidates, requestId) {
+// Process voice commands with OpenAI (if available) or fallback keyword matching
+async function processVoiceWithAI(voiceText, candidates, requestId) {
     const candidateNames = candidates.map(c => c.name);
     
-    const systemPrompt = `You are a voice command interpreter for a candidate shortlisting system.
+    // Try OpenAI first if API key is available
+    if (process.env.OPENAI_API_KEY) {
+        try {
+            const systemPrompt = `You are a voice command interpreter for a candidate shortlisting system.
 
 Current candidates available: ${candidateNames.join(', ')}
 
@@ -364,69 +344,65 @@ Respond with JSON in this format:
 If no clear shortlist action is requested, return empty actions array.
 Only use exact candidate names from the provided list.`;
 
-    try {
-        // Use OpenAI API (environment variables should be set in Vercel)
-        const response = await fetch('https://api.openai.com/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                model: 'gpt-4',
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    { role: 'user', content: voiceText }
-                ],
-                temperature: 0.1,
-                max_tokens: 500
-            })
-        });
-
-        if (!response.ok) {
-            throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        const aiResponse = data.choices[0].message.content;
-        
-        console.log(`[${requestId}] 🧠 OpenAI response: ${aiResponse}`);
-        
-        // Parse JSON response
-        const parsedResponse = JSON.parse(aiResponse);
-        
-        console.log(`[${requestId}] ✅ Parsed ${parsedResponse.actions?.length || 0} actions`);
-        
-        return parsedResponse;
-        
-    } catch (error) {
-        console.error(`[${requestId}] ❌ OpenAI error:`, error);
-        
-        // Fallback: simple keyword matching
-        const fallbackResponse = {
-            interpretation: `Fallback processing: "${voiceText}"`,
-            actions: []
-        };
-        
-        // Simple keyword matching for shortlisting
-        const lowerVoiceText = voiceText.toLowerCase();
-        
-        if (lowerVoiceText.includes('shortlist') || lowerVoiceText.includes('add')) {
-            candidateNames.forEach(name => {
-                if (lowerVoiceText.includes(name.toLowerCase())) {
-                    fallbackResponse.actions.push({
-                        type: 'shortlist',
-                        action: 'add',
-                        candidateName: name,
-                        confidence: 0.7
-                    });
-                }
+            const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    model: 'gpt-4',
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: voiceText }
+                    ],
+                    temperature: 0.1,
+                    max_tokens: 500
+                })
             });
+
+            if (response.ok) {
+                const data = await response.json();
+                const aiResponse = data.choices[0].message.content;
+                
+                console.log(`[${requestId}] 🧠 OpenAI response: ${aiResponse}`);
+                
+                const parsedResponse = JSON.parse(aiResponse);
+                console.log(`[${requestId}] ✅ OpenAI parsed ${parsedResponse.actions?.length || 0} actions`);
+                
+                return parsedResponse;
+            }
+        } catch (error) {
+            console.error(`[${requestId}] ❌ OpenAI error:`, error);
         }
-        
-        console.log(`[${requestId}] 🔄 Fallback generated ${fallbackResponse.actions.length} actions`);
-        
-        return fallbackResponse;
     }
+    
+    // Fallback: simple keyword matching
+    console.log(`[${requestId}] 🔄 Using fallback keyword matching`);
+    
+    const fallbackResponse = {
+        interpretation: `Fallback keyword processing: "${voiceText}"`,
+        actions: []
+    };
+    
+    // Simple keyword matching for shortlisting
+    const lowerVoiceText = voiceText.toLowerCase();
+    
+    if (lowerVoiceText.includes('shortlist') || lowerVoiceText.includes('add')) {
+        candidateNames.forEach(name => {
+            if (lowerVoiceText.includes(name.toLowerCase())) {
+                fallbackResponse.actions.push({
+                    type: 'shortlist',
+                    action: 'add',
+                    candidateName: name,
+                    confidence: 0.7
+                });
+            }
+        });
+    }
+    
+    console.log(`[${requestId}] 🔄 Fallback generated ${fallbackResponse.actions.length} actions`);
+    
+    return fallbackResponse;
 }
 
