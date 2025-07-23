@@ -1,13 +1,8 @@
 {
   "version": 2,
   "functions": {
-    "api/voice-commands.js": {
-      "maxDuration": 30
-    },
-    "api/candidates.js": {
+    "api/*.js": {
       "maxDuration": 30
     }
   }
-  ]
 }
-
