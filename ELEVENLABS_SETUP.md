@@ -4,7 +4,7 @@ Complete guide to connect ElevenLabs voice commands to your enhanced Vercel API 
 
 ---
 
-## 🎯 **What You Need to Configure**
+## 🎯 **What You Need to Configure HEre**
 
 ### **ElevenLabs Voice Agent Setup**
 Configure ElevenLabs to send voice commands to your API when users speak shortlisting commands.
