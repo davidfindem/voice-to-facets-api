@@ -1,22 +1,29 @@
 {
-  "name": "voice-to-facets-api",
-  "version": "1.0.0",
-  "description": "API service that translates voice commands to search facet actions using ChatGPT",
+  "name": "voice-to-facets-api-enhanced",
+  "version": "2.0.0",
+  "description": "Enhanced voice-controlled candidate management API with Chrome extension integration",
   "main": "api/voice-commands.js",
   "scripts": {
     "dev": "vercel dev",
-    "deploy": "vercel --prod"
+    "build": "echo 'No build step required for Vercel serverless functions'",
+    "test": "echo 'No tests specified'"
   },
-  "dependencies": {},
-  "devDependencies": {},
+  "dependencies": {
+    "node-fetch": "^3.3.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "keywords": [
-    "voice-commands",
-    "search-facets",
-    "chatgpt",
+    "voice-control",
+    "candidate-management", 
+    "chrome-extension",
+    "elevenlabs",
     "openai",
-    "chrome-extension"
+    "vercel",
+    "api"
   ],
-  "author": "Manus AI",
+  "author": "Your Name",
   "license": "MIT"
 }
 
