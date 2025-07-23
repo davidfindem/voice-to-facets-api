@@ -1,29 +1,9 @@
 {
-  "name": "voice-to-facets-api-enhanced",
-  "version": "2.0.0",
-  "description": "Enhanced voice-controlled candidate management API with Chrome extension integration",
+  "name": "voice-to-facets-api",
+  "version": "1.0.0",
+  "description": "Voice-controlled candidate management API",
   "main": "api/voice-commands.js",
-  "scripts": {
-    "dev": "vercel dev",
-    "build": "echo 'No build step required for Vercel serverless functions'",
-    "test": "echo 'No tests specified'"
-  },
-  "dependencies": {
-    "node-fetch": "^3.3.2"
-  },
   "engines": {
     "node": ">=18.0.0"
-  },
-  "keywords": [
-    "voice-control",
-    "candidate-management", 
-    "chrome-extension",
-    "elevenlabs",
-    "openai",
-    "vercel",
-    "api"
-  ],
-  "author": "Your Name",
-  "license": "MIT"
+  }
 }
-
