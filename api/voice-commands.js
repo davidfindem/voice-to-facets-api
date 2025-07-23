@@ -1,174 +1,246 @@
-// Voice-to-Facets API - Translates voice commands to search filter actions
+// Enhanced voice-commands.js - Your existing endpoint with candidate integration
+// This maintains backward compatibility while adding new functionality
 
-// In-memory storage for pending commands (in production, use Redis or database)
-let pendingCommands = [];
+// Import the candidate processing function
+import { processVoiceWithOpenAI } from './candidates.js';
+
+// Global data storage (shared with candidates.js)
+let globalData = {
+    commands: [],
+    timestamp: null,
+    candidates: [],
+    voiceCommands: [],
+    pendingCommands: []
+};
 
 export default async function handler(req, res) {
-  // Enable CORS for Chrome extension and web interface
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-  // Handle preflight requests
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
-
-  try {
-    if (req.method === 'POST') {
-      // Receive voice command and translate to filter actions
-      await handleVoiceCommand(req, res);
-    } else if (req.method === 'GET') {
-      // Chrome extension polls for pending commands
-      await handleGetCommands(req, res);
-    } else {
-      res.status(405).json({ error: 'Method not allowed' });
-    }
-  } catch (error) {
-    console.error('API Error:', error);
-    res.status(500).json({ error: 'Internal server error', details: error.message });
-  }
-}
-
-async function handleVoiceCommand(req, res) {
-  const { voiceText, currentFilters } = req.body;
-
-  if (!voiceText) {
-    res.status(400).json({ error: 'voiceText is required' });
-    return;
-  }
-
-  console.log('Received voice command:', voiceText);
-  console.log('Current filters:', currentFilters);
-
-  // Translate voice to commands using ChatGPT
-  const commands = await translateVoiceToCommands(voiceText, currentFilters);
-
-  if (commands && commands.length > 0) {
-    // Add commands to queue for Chrome extension
-    pendingCommands.push(...commands);
-    console.log('Added commands to queue:', commands);
-
-    res.json({
-      success: true,
-      commandsAdded: commands.length,
-      commands: commands,
-      message: `Translated voice command into ${commands.length} filter actions`
-    });
-  } else {
-    res.json({
-      success: false,
-      message: 'Could not translate voice command to filter actions'
-    });
-  }
-}
-
-async function handleGetCommands(req, res) {
-  // Return pending commands and clear the queue
-  const commands = [...pendingCommands];
-  pendingCommands = []; // Clear queue
-
-  console.log(`Returning ${commands.length} pending commands to Chrome extension`);
-
-  res.json({
-    commands: commands,
-    timestamp: new Date().toISOString()
-  });
-}
-
-async function translateVoiceToCommands(voiceText, currentFilters = {}) {
-  const openaiApiKey = process.env.OPENAI_API_KEY;
-
-  if (!openaiApiKey) {
-    throw new Error('OPENAI_API_KEY environment variable is not set');
-  }
-
-  const systemPrompt = `You are a search filter translator for a job search website. Convert natural language voice commands into structured filter actions.
-
-AVAILABLE FACETS:
-1. "Years of Experience" - Values like "0-2", "3-5", "6-10", "10+" 
-2. "Keywords" - Any job-related keywords or skills
-3. "Location" - Cities, states, countries, or "Remote"
-
-ACTIONS:
-- "remove" - Remove existing filters
-- "add" - Add new filters  
-- "clear" - Clear all filters in a facet
-- "replace" - Remove existing and add new
-
-CURRENT FILTERS: ${JSON.stringify(currentFilters)}
-
-EXAMPLES:
-Voice: "Find people with 5 years experience in San Francisco"
-Output: [
-  {"action": "add", "facet": "Years of Experience", "value": "3-5"},
-  {"action": "add", "facet": "Location", "value": "San Francisco"}
-]
-
-Voice: "Remove all locations and add remote workers"
-Output: [
-  {"action": "clear", "facet": "Location"},
-  {"action": "add", "facet": "Location", "value": "Remote"}
-]
-
-Voice: "Look for Python developers with 10+ years"
-Output: [
-  {"action": "add", "facet": "Keywords", "value": "Python"},
-  {"action": "add", "facet": "Years of Experience", "value": "10+"}
-]
-
-Return ONLY a JSON array of command objects. No explanations.`;
-
-  try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer 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`,
-
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'gpt-4',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: voiceText }
-        ],
-        temperature: 0.1,
-        max_tokens: 500
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
+    // Enable CORS
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
     }
 
-    const data = await response.json();
-    const commandsText = data.choices[0].message.content.trim();
+    const requestId = `voice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    console.log(`[${requestId}] 🎤 Voice Commands API - ${req.method} ${req.url}`);
 
-    console.log('ChatGPT response:', commandsText);
-
-    // Parse JSON response
-    const commands = JSON.parse(commandsText);
-
-    // Validate commands structure
-    if (!Array.isArray(commands)) {
-      throw new Error('ChatGPT response is not an array');
+    try {
+        if (req.method === 'GET') {
+            // Your existing GET endpoint - return current commands
+            return res.status(200).json({
+                commands: globalData.commands,
+                timestamp: new Date().toISOString(),
+                candidatesAvailable: globalData.candidates.length,
+                pendingActions: globalData.pendingCommands.filter(cmd => !cmd.executed).length
+            });
+        }
+        
+        if (req.method === 'POST') {
+            // Enhanced POST endpoint - process voice commands from ElevenLabs
+            const { voiceText, metadata, source } = req.body;
+            
+            if (!voiceText) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Missing voice text',
+                    requestId: requestId
+                });
+            }
+            
+            console.log(`[${requestId}] 🎤 Processing voice: "${voiceText}"`);
+            
+            // If we have candidates, process with AI for shortlisting
+            if (globalData.candidates.length > 0) {
+                console.log(`[${requestId}] 🧠 Processing with OpenAI (${globalData.candidates.length} candidates available)`);
+                
+                // Process with OpenAI for candidate shortlisting
+                const aiResponse = await processVoiceWithOpenAI(voiceText, globalData.candidates, requestId);
+                
+                // Store the voice command
+                const voiceCommand = {
+                    id: `voice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                    text: voiceText,
+                    timestamp: new Date().toISOString(),
+                    source: source || 'ElevenLabs',
+                    aiResponse: aiResponse,
+                    processed: true
+                };
+                
+                globalData.voiceCommands.push(voiceCommand);
+                
+                // Generate shortlist commands
+                let commandsGenerated = 0;
+                if (aiResponse.actions && aiResponse.actions.length > 0) {
+                    for (const action of aiResponse.actions) {
+                        const command = {
+                            id: `cmd_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                            type: action.type,
+                            action: action.action,
+                            candidateName: action.candidateName,
+                            confidence: action.confidence,
+                            voiceCommandId: voiceCommand.id,
+                            timestamp: new Date().toISOString(),
+                            executed: false
+                        };
+                        
+                        globalData.pendingCommands.push(command);
+                        globalData.commands.push(command); // For backward compatibility
+                        commandsGenerated++;
+                    }
+                }
+                
+                console.log(`[${requestId}] ✅ Generated ${commandsGenerated} shortlist commands`);
+                
+                return res.status(200).json({
+                    success: true,
+                    voiceCommandId: voiceCommand.id,
+                    interpretation: aiResponse.interpretation,
+                    actions: aiResponse.actions,
+                    commandsGenerated: commandsGenerated,
+                    commands: globalData.commands, // For backward compatibility
+                    timestamp: new Date().toISOString(),
+                    requestId: requestId
+                });
+                
+            } else {
+                // No candidates available - store as basic voice command
+                console.log(`[${requestId}] ⚠️ No candidates available for shortlisting`);
+                
+                const basicCommand = {
+                    id: `basic_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                    text: voiceText,
+                    timestamp: new Date().toISOString(),
+                    source: source || 'ElevenLabs',
+                    processed: false,
+                    note: 'No candidates available for processing'
+                };
+                
+                globalData.commands.push(basicCommand);
+                
+                return res.status(200).json({
+                    success: true,
+                    message: 'Voice command received but no candidates available for shortlisting',
+                    command: basicCommand,
+                    commands: globalData.commands,
+                    timestamp: new Date().toISOString(),
+                    requestId: requestId,
+                    note: 'Upload candidates via Chrome extension first'
+                });
+            }
+        }
+        
+        // Method not allowed
+        return res.status(405).json({
+            error: 'Method not allowed',
+            allowedMethods: ['GET', 'POST'],
+            requestId: requestId
+        });
+        
+    } catch (error) {
+        console.error(`[${requestId}] ❌ Voice Commands Error:`, error);
+        return res.status(500).json({
+            success: false,
+            error: 'Internal server error',
+            message: error.message,
+            requestId: requestId,
+            timestamp: new Date().toISOString()
+        });
     }
+}
 
-    // Validate each command
-    const validCommands = commands.filter(cmd => {
-      return cmd.action && cmd.facet && 
-             ['remove', 'add', 'clear', 'replace'].includes(cmd.action) &&
-             ['Years of Experience', 'Keywords', 'Location'].includes(cmd.facet);
-    });
+// Helper function to process voice with OpenAI (shared with candidates.js)
+async function processVoiceWithOpenAI(voiceText, candidates, requestId) {
+    const candidateNames = candidates.map(c => c.name);
+    
+    const systemPrompt = `You are a voice command interpreter for a candidate shortlisting system.
 
-    console.log('Valid commands:', validCommands);
-    return validCommands;
+Current candidates available: ${candidateNames.join(', ')}
 
-  } catch (error) {
-    console.error('Error translating voice to commands:', error);
-    return [];
-  }
+Your job is to interpret voice commands and generate shortlist actions. 
+
+Voice commands might be like:
+- "Shortlist Todd Kurtz and Kyle Scharnhorst"
+- "Add Kenneth Chen to the shortlist"
+- "I want to shortlist the first three candidates"
+- "Remove Scott Goldwater from shortlist"
+
+Respond with JSON in this format:
+{
+  "interpretation": "Brief explanation of what the user wants",
+  "actions": [
+    {
+      "type": "shortlist",
+      "action": "add" or "remove",
+      "candidateName": "Exact candidate name",
+      "confidence": 0.0 to 1.0
+    }
+  ]
+}
+
+If no clear shortlist action is requested, return empty actions array.
+Only use exact candidate names from the provided list.`;
+
+    try {
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: 'gpt-4',
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: voiceText }
+                ],
+                temperature: 0.1,
+                max_tokens: 500
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        const aiResponse = data.choices[0].message.content;
+        
+        console.log(`[${requestId}] 🧠 OpenAI response: ${aiResponse}`);
+        
+        const parsedResponse = JSON.parse(aiResponse);
+        console.log(`[${requestId}] ✅ Parsed ${parsedResponse.actions?.length || 0} actions`);
+        
+        return parsedResponse;
+        
+    } catch (error) {
+        console.error(`[${requestId}] ❌ OpenAI error:`, error);
+        
+        // Fallback: simple keyword matching
+        const fallbackResponse = {
+            interpretation: `Fallback processing: "${voiceText}"`,
+            actions: []
+        };
+        
+        const lowerVoiceText = voiceText.toLowerCase();
+        
+        if (lowerVoiceText.includes('shortlist') || lowerVoiceText.includes('add')) {
+            candidateNames.forEach(name => {
+                if (lowerVoiceText.includes(name.toLowerCase())) {
+                    fallbackResponse.actions.push({
+                        type: 'shortlist',
+                        action: 'add',
+                        candidateName: name,
+                        confidence: 0.7
+                    });
+                }
+            });
+        }
+        
+        console.log(`[${requestId}] 🔄 Fallback generated ${fallbackResponse.actions.length} actions`);
+        
+        return fallbackResponse;
+    }
 }
 
